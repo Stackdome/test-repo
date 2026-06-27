@@ -4,6 +4,8 @@ function App() {
         <Container>
             <Row>
                 <Col md={{ offset: 3, span: 6 }}>
+                    <h1 className="text-center mt-4 mb-1">Todo App</h1>
+                    <p className="text-center text-muted mb-4">Powered by Stackdome</p>
                     <TodoListCard />
                 </Col>
             </Row>
