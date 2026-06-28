@@ -79,7 +79,7 @@ jobs:
         run: |
           API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
 
-          PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
+          PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks" \
             -H "Authorization: Bearer $TOKEN" \
             | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id")
 
@@ -88,7 +88,7 @@ jobs:
             curl -s -X POST "$API_BASE/preview-stacks/$PREVIEW_ID/sync" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"commit\":\"$COMMIT_SHA\"}"
+              -d "{}"
           else
             echo "Creating preview for PR #$PR_NUMBER (branch: $BRANCH, commit: $COMMIT_SHA)..."
             RESPONSE=$(curl -s -X POST "$API_BASE/preview-stacks" \
@@ -232,7 +232,7 @@ jobs:
             exit 0
           fi
 
-          PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
+          PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks" \
             -H "Authorization: Bearer $TOKEN" \
             | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id")
 
