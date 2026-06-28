@@ -1,0 +1,260 @@
+name: Preview Environment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+env:
+  STACKDOME_URL: https://stackdome.io
+  TEAM_NAME: default
+  CONFIG_NAME: test-repo-previews
+  REPO_URL: https://github.com/Stackdome/test-repo
+
+permissions:
+  pull-requests: write
+
+jobs:
+  preview-deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to StackDome
+        id: auth
+        run: |
+          RESPONSE=$(curl -sf -X POST "$STACKDOME_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"${{ secrets.STACKDOME_EMAIL }}\",\"password\":\"${{ secrets.STACKDOME_PASSWORD }}\"}")
+
+          echo "token=$(echo "$RESPONSE" | jq -r '.token')" >> "$GITHUB_OUTPUT"
+          echo "org_id=$(echo "$RESPONSE" | jq -r '.user.organisation_id')" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure preview config exists
+        id: config
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+          ORG_ID: ${{ steps.auth.outputs.org_id }}
+        run: |
+          API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
+
+          # Look for existing config by name
+          CONFIG_ID=$(curl -sf "$API_BASE/stack-preview-configs" \
+            -H "Authorization: Bearer $TOKEN" \
+            | jq -r ".items[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
+
+          if [ -z "$CONFIG_ID" ]; then
+            echo "Creating preview config..."
+            CONFIG_ID=$(curl -sf -X POST "$API_BASE/stack-preview-configs" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"name\": \"$CONFIG_NAME\",
+                \"git_repository\": {
+                  \"repo_url\": \"$REPO_URL\",
+                  \"base_branch\": \"main\"
+                },
+                \"stackfile_path\": \"stackfile.yaml\",
+                \"max_active_previews\": 5
+              }" | jq -r '.id')
+            echo "Created config: $CONFIG_ID"
+          else
+            echo "Found existing config: $CONFIG_ID"
+          fi
+
+          echo "config_id=$CONFIG_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Create or sync preview
+        id: preview
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+          ORG_ID: ${{ steps.auth.outputs.org_id }}
+          CONFIG_ID: ${{ steps.config.outputs.config_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.head_ref }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
+
+          # Check if preview already exists for this PR
+          PREVIEW_ID=$(curl -sf "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
+            -H "Authorization: Bearer $TOKEN" \
+            | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
+
+          if [ -n "$PREVIEW_ID" ]; then
+            echo "Syncing existing preview $PREVIEW_ID with commit $COMMIT_SHA..."
+            curl -sf -X POST "$API_BASE/preview-stacks/$PREVIEW_ID/sync" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"commit\": \"$COMMIT_SHA\"}"
+          else
+            echo "Creating preview for PR #$PR_NUMBER (branch: $BRANCH, commit: $COMMIT_SHA)..."
+            PREVIEW_ID=$(curl -sf -X POST "$API_BASE/preview-stacks" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"config_id\": \"$CONFIG_ID\",
+                \"pr_number\": \"$PR_NUMBER\",
+                \"branch\": \"$BRANCH\",
+                \"commit\": \"$COMMIT_SHA\"
+              }" | jq -r '.id')
+            echo "Created preview: $PREVIEW_ID"
+          fi
+
+          echo "preview_id=$PREVIEW_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for preview to be ready
+        id: status
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+          ORG_ID: ${{ steps.auth.outputs.org_id }}
+          PREVIEW_ID: ${{ steps.preview.outputs.preview_id }}
+        run: |
+          API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
+          TIMEOUT=600
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            RESPONSE=$(curl -sf "$API_BASE/preview-stacks/$PREVIEW_ID" \
+              -H "Authorization: Bearer $TOKEN")
+
+            PHASE=$(echo "$RESPONSE" | jq -r '.status.phase // "unknown"')
+            echo "Phase: $PHASE (${ELAPSED}s elapsed)"
+
+            if [ "$PHASE" = "Ready" ]; then
+              URLS=$(echo "$RESPONSE" | jq -r '.status.outputs.urls // []')
+              COMMIT=$(echo "$RESPONSE" | jq -r '.status.outputs.commit_sha // ""')
+              echo "urls=$URLS" >> "$GITHUB_OUTPUT"
+              echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+              echo "phase=Ready" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ "$PHASE" = "Failed" ]; then
+              MESSAGE=$(echo "$RESPONSE" | jq -r '.status.message // "unknown error"')
+              echo "Preview failed: $MESSAGE"
+              echo "phase=Failed" >> "$GITHUB_OUTPUT"
+              echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
+            sleep 15
+            ELAPSED=$((ELAPSED + 15))
+          done
+
+          echo "Timed out waiting for preview to be ready"
+          echo "phase=Timeout" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Post preview URL to PR
+        if: steps.status.outputs.phase == 'Ready'
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URLS: ${{ steps.status.outputs.urls }}
+          PREVIEW_COMMIT: ${{ steps.status.outputs.commit }}
+        with:
+          script: |
+            const marker = '<!-- stackdome-preview -->';
+            const urls = JSON.parse(process.env.PREVIEW_URLS || '[]');
+            const commit = process.env.PREVIEW_COMMIT || 'unknown';
+
+            let urlTable = '| Resource | URL |\n|----------|-----|\n';
+            for (const u of urls) {
+              urlTable += `| ${u.resource} | ${u.url} |\n`;
+            }
+
+            const body = [
+              marker,
+              '### Preview Environment',
+              '',
+              urlTable,
+              `**Commit:** \`${commit.substring(0, 7)}\``,
+              `**Status:** Ready`,
+            ].join('\n');
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  preview-cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to StackDome
+        id: auth
+        run: |
+          RESPONSE=$(curl -sf -X POST "$STACKDOME_URL/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"${{ secrets.STACKDOME_EMAIL }}\",\"password\":\"${{ secrets.STACKDOME_PASSWORD }}\"}")
+
+          echo "token=$(echo "$RESPONSE" | jq -r '.token')" >> "$GITHUB_OUTPUT"
+          echo "org_id=$(echo "$RESPONSE" | jq -r '.user.organisation_id')" >> "$GITHUB_OUTPUT"
+
+      - name: Delete preview
+        env:
+          TOKEN: ${{ steps.auth.outputs.token }}
+          ORG_ID: ${{ steps.auth.outputs.org_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
+
+          # Find config
+          CONFIG_ID=$(curl -sf "$API_BASE/stack-preview-configs" \
+            -H "Authorization: Bearer $TOKEN" \
+            | jq -r ".items[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
+
+          if [ -z "$CONFIG_ID" ]; then
+            echo "No preview config found, nothing to clean up"
+            exit 0
+          fi
+
+          # Find preview for this PR
+          PREVIEW_ID=$(curl -sf "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
+            -H "Authorization: Bearer $TOKEN" \
+            | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
+
+          if [ -n "$PREVIEW_ID" ]; then
+            echo "Deleting preview $PREVIEW_ID..."
+            curl -sf -X DELETE "$API_BASE/preview-stacks/$PREVIEW_ID" \
+              -H "Authorization: Bearer $TOKEN"
+            echo "Preview deleted"
+          else
+            echo "No preview found for PR #$PR_NUMBER"
+          fi
+
+      - name: Remove PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- stackdome-preview -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.deleteComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+              });
+            }
