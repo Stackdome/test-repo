@@ -21,7 +21,7 @@ jobs:
       - name: Login to StackDome
         id: auth
         run: |
-          RESPONSE=$(curl -sf -X POST "$STACKDOME_URL/api/v1/auth/login" \
+          RESPONSE=$(curl -s -X POST "$STACKDOME_URL/api/v1/auth/login" \
             -H "Content-Type: application/json" \
             -d "{\"email\":\"${{ secrets.STACKDOME_EMAIL }}\",\"password\":\"${{ secrets.STACKDOME_PASSWORD }}\"}")
 
@@ -37,13 +37,13 @@ jobs:
           API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
 
           # Look for existing config by name
-          CONFIG_ID=$(curl -sf "$API_BASE/stack-preview-configs" \
+          CONFIG_ID=$(curl -s "$API_BASE/stack-preview-configs" \
             -H "Authorization: Bearer $TOKEN" \
             | jq -r ".items[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
 
           if [ -z "$CONFIG_ID" ]; then
             echo "Creating preview config..."
-            CONFIG_ID=$(curl -sf -X POST "$API_BASE/stack-preview-configs" \
+            CONFIG_ID=$(curl -s -X POST "$API_BASE/stack-preview-configs" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
               -d "{
@@ -75,19 +75,19 @@ jobs:
           API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
 
           # Check if preview already exists for this PR
-          PREVIEW_ID=$(curl -sf "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
+          PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
             -H "Authorization: Bearer $TOKEN" \
             | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
 
           if [ -n "$PREVIEW_ID" ]; then
             echo "Syncing existing preview $PREVIEW_ID with commit $COMMIT_SHA..."
-            curl -sf -X POST "$API_BASE/preview-stacks/$PREVIEW_ID/sync" \
+            curl -s -X POST "$API_BASE/preview-stacks/$PREVIEW_ID/sync" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
               -d "{\"commit\": \"$COMMIT_SHA\"}"
           else
             echo "Creating preview for PR #$PR_NUMBER (branch: $BRANCH, commit: $COMMIT_SHA)..."
-            PREVIEW_ID=$(curl -sf -X POST "$API_BASE/preview-stacks" \
+            PREVIEW_ID=$(curl -s -X POST "$API_BASE/preview-stacks" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
               -d "{
@@ -113,7 +113,7 @@ jobs:
           ELAPSED=0
 
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            RESPONSE=$(curl -sf "$API_BASE/preview-stacks/$PREVIEW_ID" \
+            RESPONSE=$(curl -s "$API_BASE/preview-stacks/$PREVIEW_ID" \
               -H "Authorization: Bearer $TOKEN")
 
             PHASE=$(echo "$RESPONSE" | jq -r '.status.phase // "unknown"')
@@ -201,7 +201,7 @@ jobs:
       - name: Login to StackDome
         id: auth
         run: |
-          RESPONSE=$(curl -sf -X POST "$STACKDOME_URL/api/v1/auth/login" \
+          RESPONSE=$(curl -s -X POST "$STACKDOME_URL/api/v1/auth/login" \
             -H "Content-Type: application/json" \
             -d "{\"email\":\"${{ secrets.STACKDOME_EMAIL }}\",\"password\":\"${{ secrets.STACKDOME_PASSWORD }}\"}")
 
@@ -217,7 +217,7 @@ jobs:
           API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
 
           # Find config
-          CONFIG_ID=$(curl -sf "$API_BASE/stack-preview-configs" \
+          CONFIG_ID=$(curl -s "$API_BASE/stack-preview-configs" \
             -H "Authorization: Bearer $TOKEN" \
             | jq -r ".items[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
 
@@ -227,13 +227,13 @@ jobs:
           fi
 
           # Find preview for this PR
-          PREVIEW_ID=$(curl -sf "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
+          PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
             -H "Authorization: Bearer $TOKEN" \
             | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
 
           if [ -n "$PREVIEW_ID" ]; then
             echo "Deleting preview $PREVIEW_ID..."
-            curl -sf -X DELETE "$API_BASE/preview-stacks/$PREVIEW_ID" \
+            curl -s -X DELETE "$API_BASE/preview-stacks/$PREVIEW_ID" \
               -H "Authorization: Bearer $TOKEN"
             echo "Preview deleted"
           else
