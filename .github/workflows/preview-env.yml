@@ -120,7 +120,7 @@ jobs:
             echo "Phase: $PHASE (${ELAPSED}s elapsed)"
 
             if [ "$PHASE" = "Ready" ]; then
-              URLS=$(echo "$RESPONSE" | jq -r '.status.outputs.urls // []')
+              URLS=$(echo "$RESPONSE" | jq -c '.status.outputs.urls // []')
               COMMIT=$(echo "$RESPONSE" | jq -r '.status.outputs.commit_sha // ""')
               echo "urls=$URLS" >> "$GITHUB_OUTPUT"
               echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
