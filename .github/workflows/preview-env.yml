@@ -25,8 +25,17 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"email\":\"${{ secrets.STACKDOME_EMAIL }}\",\"password\":\"${{ secrets.STACKDOME_PASSWORD }}\"}")
 
-          echo "token=$(echo "$RESPONSE" | jq -r '.token')" >> "$GITHUB_OUTPUT"
-          echo "org_id=$(echo "$RESPONSE" | jq -r '.user.organisation_id')" >> "$GITHUB_OUTPUT"
+          TOKEN=$(echo "$RESPONSE" | jq -r '.token')
+          ORG_ID=$(echo "$RESPONSE" | jq -r '.user.organisation_id')
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Login failed: $RESPONSE"
+            exit 1
+          fi
+
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          echo "org_id=$ORG_ID" >> "$GITHUB_OUTPUT"
 
       - name: Ensure preview config exists
         id: config
@@ -36,25 +45,21 @@ jobs:
         run: |
           API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
 
-          # Look for existing config by name
           CONFIG_ID=$(curl -s "$API_BASE/stack-preview-configs" \
             -H "Authorization: Bearer $TOKEN" \
-            | jq -r "(.items // [])[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
+            | jq -r ".items[] | select(.name == \"$CONFIG_NAME\") | .id")
 
-          if [ -z "$CONFIG_ID" ]; then
+          if [ -z "$CONFIG_ID" ] || [ "$CONFIG_ID" = "null" ]; then
             echo "Creating preview config..."
-            CONFIG_ID=$(curl -s -X POST "$API_BASE/stack-preview-configs" \
+            RESPONSE=$(curl -s -X POST "$API_BASE/stack-preview-configs" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{
-                \"name\": \"$CONFIG_NAME\",
-                \"git_repository\": {
-                  \"repo_url\": \"$REPO_URL\",
-                  \"base_branch\": \"main\"
-                },
-                \"stackfile_path\": \"stackfile.yaml\",
-                \"max_active_previews\": 5
-              }" | jq -r '.id')
+              -d "{\"name\":\"$CONFIG_NAME\",\"git_repository\":{\"repo_url\":\"$REPO_URL\",\"base_branch\":\"main\"},\"stackfile_path\":\"stackfile.yaml\",\"max_active_previews\":5}")
+            CONFIG_ID=$(echo "$RESPONSE" | jq -r '.id')
+            if [ -z "$CONFIG_ID" ] || [ "$CONFIG_ID" = "null" ]; then
+              echo "Failed to create config: $RESPONSE"
+              exit 1
+            fi
             echo "Created config: $CONFIG_ID"
           else
             echo "Found existing config: $CONFIG_ID"
@@ -74,28 +79,27 @@ jobs:
         run: |
           API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
 
-          # Check if preview already exists for this PR
           PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
             -H "Authorization: Bearer $TOKEN" \
-            | jq -r "(.items // [])[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
+            | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id")
 
-          if [ -n "$PREVIEW_ID" ]; then
+          if [ -n "$PREVIEW_ID" ] && [ "$PREVIEW_ID" != "null" ]; then
             echo "Syncing existing preview $PREVIEW_ID with commit $COMMIT_SHA..."
             curl -s -X POST "$API_BASE/preview-stacks/$PREVIEW_ID/sync" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"commit\": \"$COMMIT_SHA\"}"
+              -d "{\"commit\":\"$COMMIT_SHA\"}"
           else
             echo "Creating preview for PR #$PR_NUMBER (branch: $BRANCH, commit: $COMMIT_SHA)..."
-            PREVIEW_ID=$(curl -s -X POST "$API_BASE/preview-stacks" \
+            RESPONSE=$(curl -s -X POST "$API_BASE/preview-stacks" \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{
-                \"config_id\": \"$CONFIG_ID\",
-                \"pr_number\": \"$PR_NUMBER\",
-                \"branch\": \"$BRANCH\",
-                \"commit\": \"$COMMIT_SHA\"
-              }" | jq -r '.id')
+              -d "{\"config_id\":\"$CONFIG_ID\",\"pr_number\":\"$PR_NUMBER\",\"branch\":\"$BRANCH\",\"commit\":\"$COMMIT_SHA\"}")
+            PREVIEW_ID=$(echo "$RESPONSE" | jq -r '.id')
+            if [ -z "$PREVIEW_ID" ] || [ "$PREVIEW_ID" = "null" ]; then
+              echo "Failed to create preview: $RESPONSE"
+              exit 1
+            fi
             echo "Created preview: $PREVIEW_ID"
           fi
 
@@ -170,7 +174,6 @@ jobs:
               `**Status:** Ready`,
             ].join('\n');
 
-            // Find existing comment
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -205,8 +208,12 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"email\":\"${{ secrets.STACKDOME_EMAIL }}\",\"password\":\"${{ secrets.STACKDOME_PASSWORD }}\"}")
 
-          echo "token=$(echo "$RESPONSE" | jq -r '.token')" >> "$GITHUB_OUTPUT"
-          echo "org_id=$(echo "$RESPONSE" | jq -r '.user.organisation_id')" >> "$GITHUB_OUTPUT"
+          TOKEN=$(echo "$RESPONSE" | jq -r '.token')
+          ORG_ID=$(echo "$RESPONSE" | jq -r '.user.organisation_id')
+
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          echo "org_id=$ORG_ID" >> "$GITHUB_OUTPUT"
 
       - name: Delete preview
         env:
@@ -216,22 +223,20 @@ jobs:
         run: |
           API_BASE="$STACKDOME_URL/api/v1/organizations/$ORG_ID/teams/$TEAM_NAME"
 
-          # Find config
           CONFIG_ID=$(curl -s "$API_BASE/stack-preview-configs" \
             -H "Authorization: Bearer $TOKEN" \
-            | jq -r "(.items // [])[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
+            | jq -r ".items[] | select(.name == \"$CONFIG_NAME\") | .id")
 
-          if [ -z "$CONFIG_ID" ]; then
+          if [ -z "$CONFIG_ID" ] || [ "$CONFIG_ID" = "null" ]; then
             echo "No preview config found, nothing to clean up"
             exit 0
           fi
 
-          # Find preview for this PR
           PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
             -H "Authorization: Bearer $TOKEN" \
-            | jq -r "(.items // [])[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
+            | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id")
 
-          if [ -n "$PREVIEW_ID" ]; then
+          if [ -n "$PREVIEW_ID" ] && [ "$PREVIEW_ID" != "null" ]; then
             echo "Deleting preview $PREVIEW_ID..."
             curl -s -X DELETE "$API_BASE/preview-stacks/$PREVIEW_ID" \
               -H "Authorization: Bearer $TOKEN"
