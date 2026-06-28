@@ -39,7 +39,7 @@ jobs:
           # Look for existing config by name
           CONFIG_ID=$(curl -s "$API_BASE/stack-preview-configs" \
             -H "Authorization: Bearer $TOKEN" \
-            | jq -r ".items[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
+            | jq -r "(.items // [])[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
 
           if [ -z "$CONFIG_ID" ]; then
             echo "Creating preview config..."
@@ -77,7 +77,7 @@ jobs:
           # Check if preview already exists for this PR
           PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
             -H "Authorization: Bearer $TOKEN" \
-            | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
+            | jq -r "(.items // [])[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
 
           if [ -n "$PREVIEW_ID" ]; then
             echo "Syncing existing preview $PREVIEW_ID with commit $COMMIT_SHA..."
@@ -219,7 +219,7 @@ jobs:
           # Find config
           CONFIG_ID=$(curl -s "$API_BASE/stack-preview-configs" \
             -H "Authorization: Bearer $TOKEN" \
-            | jq -r ".items[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
+            | jq -r "(.items // [])[] | select(.name == \"$CONFIG_NAME\") | .id // empty")
 
           if [ -z "$CONFIG_ID" ]; then
             echo "No preview config found, nothing to clean up"
@@ -229,7 +229,7 @@ jobs:
           # Find preview for this PR
           PREVIEW_ID=$(curl -s "$API_BASE/preview-stacks?config_id=$CONFIG_ID" \
             -H "Authorization: Bearer $TOKEN" \
-            | jq -r ".items[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
+            | jq -r "(.items // [])[] | select(.pr_number == \"$PR_NUMBER\") | .id // empty")
 
           if [ -n "$PREVIEW_ID" ]; then
             echo "Deleting preview $PREVIEW_ID..."
