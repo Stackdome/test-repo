@@ -5,7 +5,10 @@ function App() {
             <Row>
                 <Col md={{ offset: 3, span: 6 }}>
                     <h1 className="text-center mt-4 mb-1">Todo App</h1>
-                    <p className="text-center text-muted mb-4">Powered by Stackdome</p>
+                    <p className="text-center text-muted mb-2">Powered by Stackdome</p>
+                    <div className="alert alert-info text-center py-1 mb-4">
+                        <small>Preview Environment - PR Branch</small>
+                    </div>
                     <TodoListCard />
                 </Col>
             </Row>
